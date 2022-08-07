@@ -5,14 +5,19 @@
 extern "C" {
 #endif
 
-#include <X11/Xlib.h>
+typedef enum {
+    MBOX_BUTTONFLAGS_NONE = 0,
+    MBOX_BUTTONFLAGS_RETURNKEY_DEFAULT = (1<<0),
+    MBOX_BUTTONFLAGS_ESCAPEKEY_DEFAULT = (1<<1)
+} MessageBoxButtonFlags;
 
 typedef struct Button{
-    wchar_t *label;
+    MessageBoxButtonFlags flags;
     int result;
+    const char *label;
 }Button;
 
-int Messagebox(const char* title, const wchar_t* text, const Button* buttons, int numButtons);
+int Messagebox(const char* title, const char* text, const Button* buttons, int numButtons);
 
 #ifdef __cplusplus
 }

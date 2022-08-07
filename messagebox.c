@@ -78,27 +78,27 @@ void setWindowTitle(const char* title, const Window *win, Display *dpy){
                      1);
 }
 
-void split(const wchar_t* text, const wchar_t* seps, wchar_t ***str, int *count){
-    wchar_t *last, *tok, *data;
+void split(const char* text, const char* seps, char ***str, int *count){
+    char *tok, *data;
     int i;
     *count = 0;
-    data = wcsdup(text);
+    data = strdup(text);
 
-    for (tok = wcstok(data, seps, &last); tok != NULL; tok = wcstok(NULL, seps, &last))
+    for (tok = strtok(data, seps); tok != NULL; tok = strtok(NULL, seps))
         (*count)++;
 
     free(data);
     fflush(stdout);
-    data = wcsdup(text);
-    *str = (wchar_t **)malloc((size_t)(*count)*sizeof(wchar_t*));
+    data = strdup(text);
+    *str = (char **)malloc((size_t)(*count)*sizeof(char*));
 
 
-    for (i = 0, tok = wcstok(data, seps, &last); tok != NULL; tok = wcstok(NULL, seps, &last), i++)
-        (*str)[i] = wcsdup(tok);
+    for (i = 0, tok = strtok(data, seps); tok != NULL; tok = strtok(NULL, seps), i++)
+        (*str)[i] = strdup(tok);
     free(data);
 }
 
-void computeTextSize(XFontSet* fs, wchar_t** texts, int size, unsigned int spaceBetweenLines,
+void computeTextSize(XFontSet* fs, char** texts, int size, unsigned int spaceBetweenLines,
                      unsigned int *w,  unsigned  int *h)
 {
     int i;
@@ -106,18 +106,44 @@ void computeTextSize(XFontSet* fs, wchar_t** texts, int size, unsigned int space
     *h = 0;
     *w = 0;
     for(i = 0; i < size; i++){
-        XwcTextExtents(*fs, texts[i], (int)wcslen(texts[i]), &rect, NULL);
+        Xutf8TextExtents(*fs, texts[i], (int)strlen(texts[i]), &rect, NULL);
         *w = (rect.width > *w) ? (rect.width): *w;
         *h += rect.height + spaceBetweenLines;
         fflush(stdin);
     }
 }
 
-void createGC(GC* gc, const Colormap* cmap, Display* dpy, const  Window* win,
+void createColor(const Colormap* cmap, Display* dpy, XColor* color,
+                unsigned char red, unsigned char green, unsigned char blue)
+{
+    const float coloratio = (float) 65535 / 255;
+    memset(color, 0, sizeof(XColor));
+    color->red   = (unsigned short)(coloratio * red  );
+    color->green = (unsigned short)(coloratio * green);
+    color->blue  = (unsigned short)(coloratio * blue );
+
+    XAllocColor (dpy, *cmap, color);
+}
+
+void createGC(GC* gc, const Colormap* cmap, Display* dpy, const  Drawable* drawable,
               unsigned char red, unsigned char green, unsigned char blue){
     float coloratio = (float) 65535 / 255;
     XColor color;
-    *gc = XCreateGC (dpy, *win, 0,0);
+    *gc = XCreateGC (dpy, *drawable, 0,0);
+    memset(&color, 0, sizeof(color));
+    color.red   = (unsigned short)(coloratio * red  );
+    color.green = (unsigned short)(coloratio * green);
+    color.blue  = (unsigned short)(coloratio * blue );
+    color.flags = DoRed | DoGreen | DoBlue;
+    XAllocColor (dpy, *cmap, &color);
+    XSetForeground (dpy, *gc, color.pixel);
+}
+
+void createTextGC(GC* gc, const Colormap* cmap, Display* dpy, const  Window* win, XGCValues *gcValues,
+              unsigned char red, unsigned char green, unsigned char blue){
+    float coloratio = (float) 65535 / 255;
+    XColor color;
+    *gc = XCreateGC (dpy, *win, GCFont + GCForeground, gcValues);
     memset(&color, 0, sizeof(color));
     color.red   = (unsigned short)(coloratio * red  );
     color.green = (unsigned short)(coloratio * green);
@@ -133,14 +159,15 @@ bool isInside(int x, int y, XRectangle rect){
     return true;
 }
 
-int Messagebox(const char* title, const wchar_t* text, const Button* buttons, int numButtons)
+int Messagebox(const char* title, const char* text, const Button* buttons, int numButtons)
 {
+    char* oldLocale = strdup(setlocale(LC_ALL, NULL));
     setlocale(LC_ALL,"");
 
     //---- convert the text in list (to draw in multiply lines)---------------------------------------------------------
-    wchar_t** text_splitted = NULL;
+    char** text_splitted = NULL;
     int textLines = 0;
-    split(text, L"\n" , &text_splitted, &textLines);
+    split(text, "\n" , &text_splitted, &textLines);
     //------------------------------------------------------------------------------------------------------------------
 
     Display* dpy = NULL;
@@ -150,22 +177,28 @@ int Messagebox(const char* title, const wchar_t* text, const Button* buttons, in
     }
 
     int ds = DefaultScreen(dpy);
+    Colormap cmap = DefaultColormap (dpy, ds);
+
+    XColor backgroundColor;
+    createColor(&cmap, dpy, &backgroundColor, 69, 69, 69);
+
     Window win = XCreateSimpleWindow(dpy, RootWindow(dpy, ds), 0, 0, 800, 100, 1,
-                                     BlackPixel(dpy, ds), WhitePixel(dpy, ds));
+                                     BlackPixel(dpy, ds), backgroundColor.pixel);
 
 
-    XSelectInput(dpy, win, ExposureMask | PointerMotionMask | ButtonPressMask | ButtonReleaseMask);
+    XSelectInput(dpy, win, ExposureMask | PointerMotionMask | ButtonPressMask | ButtonReleaseMask | KeyPressMask);
     XMapWindow(dpy, win);
 
-    //allow windows to be closed by pressing cross button (but it wont close - see ClientMessage on switch)
+    //allow windows to be closed by pressing cross button
     Atom WM_DELETE_WINDOW = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(dpy, win, &WM_DELETE_WINDOW, 1);
 
     //--create the gc for drawing text----------------------------------------------------------------------------------
     XGCValues gcValues;
-    gcValues.font = XLoadFont(dpy, "7x13");
+    gcValues.font = XLoadFont(dpy, "fixed");
     gcValues.foreground = BlackPixel(dpy, 0);
-    GC textGC = XCreateGC(dpy, win, GCFont + GCForeground, &gcValues);
+    GC textGC;
+    createTextGC(&textGC, &cmap, dpy, &win, &gcValues, 218, 218, 218);
     XUnmapWindow( dpy, win );
     //------------------------------------------------------------------------------------------------------------------
 
@@ -174,7 +207,7 @@ int Messagebox(const char* title, const wchar_t* text, const Button* buttons, in
     int missingCharset_count = 0;
     XFontSet fs;
     fs = XCreateFontSet(dpy,
-                        "-*-*-medium-r-*-*-*-140-75-75-*-*-*-*" ,
+                        "fixed",
                         &missingCharset_list, &missingCharset_count, NULL);
 
     if (missingCharset_count) {
@@ -187,8 +220,6 @@ int Messagebox(const char* title, const wchar_t* text, const Button* buttons, in
     }
     //------------------------------------------------------------------------------------------------------------------
 
-    Colormap cmap = DefaultColormap (dpy, ds);
-
     //resize the window according to the text size-----------------------------------------------------------------------
     unsigned int winW, winH;
     unsigned int textW, textH;
@@ -200,6 +231,67 @@ int Messagebox(const char* title, const wchar_t* text, const Button* buttons, in
     winW = (newWidth > dim.winMinWidth)? newWidth: dim.winMinWidth;
     winH = (newHeight > dim.winMinHeight)? newHeight: dim.winMinHeight;
 
+    //------------------------------------------------------------------------------------------------------------------
+
+    GC barGC;
+    GC buttonGC;
+    GC buttonGC_underPointer;
+    GC buttonGC_onClick;
+    GC buttonGC_outline;                               // GC colors
+    createGC(&barGC, &cmap, dpy, &win,                 37, 37, 37);
+    createGC(&buttonGC, &cmap, dpy, &win,              69, 69, 69);
+    createGC(&buttonGC_underPointer, &cmap, dpy, &win, 59, 59, 59);
+    createGC(&buttonGC_onClick, &cmap, dpy, &win,      49, 49, 49);
+    createGC(&buttonGC_outline, &cmap, dpy, &win,      122, 122, 122);
+
+    //---setup the buttons data-----------------------------------------------------------------------------------------
+    ButtonData *btsData;
+    btsData = (ButtonData*)malloc((size_t)numButtons * sizeof(ButtonData));
+
+    int padDiff = 0;
+    int pass = 0;
+    for(int i = 0; i < numButtons; i++){
+        btsData[i].button = &buttons[i];
+        btsData[i].gc = &buttonGC;
+        XRectangle btTextDim;
+        Xutf8TextExtents(fs, btsData[i].button->label, (int)strlen(btsData[i].button->label),
+                       &btTextDim, NULL);
+        btsData[i].rect.width = (btTextDim.width < dim.btMinWidth) ? dim.btMinWidth:
+                                   (btTextDim.width + 2 * dim.btLateralPad);
+        btsData[i].rect.height = dim.btMinHeight;
+        btsData[i].rect.x = winW - dim.pad_left - btsData[i].rect.width - pass;
+        btsData[i].rect.y = textH + dim.pad_up + dim.pad_down + ((dim.barHeight - dim.btMinHeight)/ 2) ;
+        
+        if (btsData[i].rect.x < (int)dim.pad_left)
+            padDiff = dim.pad_left - btsData[i].rect.x;
+
+        pass += btsData[i].rect.width + dim.btSpacing;
+    }
+
+    // Our buttons have exceeded our window dimensions
+    if (padDiff > 0)
+    {
+        pass = 0;
+        winW += padDiff;
+
+        for (int i = 0; i < numButtons; ++i)
+        {
+            btsData[i].rect.x = winW - dim.pad_left - btsData[i].rect.width - pass;
+            pass += btsData[i].rect.width + dim.btSpacing;
+        }
+    }
+
+    // setup a back buffer that we copy from
+    XWindowAttributes wa;
+    XGetWindowAttributes(dpy, win, &wa);
+
+    Pixmap backBuffer = XCreatePixmap(dpy, win, winW, winH, wa.depth);
+
+    GC backBufferGC;
+    createGC(&backBufferGC, &cmap, dpy, &backBuffer, 69, 69, 69);
+
+    XFillRectangle(dpy, backBuffer, backBufferGC, 0, 0, winW, winH);
+
     //set windows hints
     XSizeHints hints;
     hints.flags      = PSize | PMinSize | PMaxSize;
@@ -208,44 +300,14 @@ int Messagebox(const char* title, const wchar_t* text, const Button* buttons, in
 
     XSetWMNormalHints( dpy, win, &hints );
     XMapRaised( dpy, win );
-    //------------------------------------------------------------------------------------------------------------------
-
-    GC barGC;
-    GC buttonGC;
-    GC buttonGC_underPointer;
-    GC buttonGC_onClick;                               // GC colors
-    createGC(&barGC, &cmap, dpy, &win,                 242, 242, 242);
-    createGC(&buttonGC, &cmap, dpy, &win,              202, 202, 202);
-    createGC(&buttonGC_underPointer, &cmap, dpy, &win, 192, 192, 192);
-    createGC(&buttonGC_onClick, &cmap, dpy, &win,      182, 182, 182);
-
-    //---setup the buttons data-----------------------------------------------------------------------------------------
-    ButtonData *btsData;
-    btsData = (ButtonData*)malloc((size_t)numButtons * sizeof(ButtonData));
-
-    int pass = 0;
-    for(int i = 0; i < numButtons; i++){
-        btsData[i].button = &buttons[i];
-        btsData[i].gc = &buttonGC;
-        XRectangle btTextDim;
-        XwcTextExtents(fs, btsData[i].button->label, (int)wcslen(btsData[i].button->label),
-                       &btTextDim, NULL);
-        btsData[i].rect.width = (btTextDim.width < dim.btMinWidth) ? dim.btMinWidth:
-                                   (btTextDim.width + 2 * dim.btLateralPad);
-        btsData[i].rect.height = dim.btMinHeight;
-        btsData[i].rect.x = winW - dim.pad_left - btsData[i].rect.width - pass;
-        btsData[i].rect.y = textH + dim.pad_up + dim.pad_down + ((dim.barHeight - dim.btMinHeight)/ 2) ;
-        pass += btsData[i].rect.width + dim.btSpacing;
-    }
-    //------------------------------------------------------------------------------------------------------------------
 
     setWindowTitle(title, &win, dpy);
 
     XFlush( dpy );
 
-
     bool quit = false;
     int res = -1;
+    int pressedIndex = -1;
 
     while( !quit ) {
         XEvent e;
@@ -256,48 +318,92 @@ int Messagebox(const char* title, const wchar_t* text, const Button* buttons, in
             case MotionNotify:
             case ButtonPress:
             case ButtonRelease:
-                for(int i = 0; i < numButtons; i++) {
-                    btsData[i].gc = &buttonGC;
-                    if (isInside(e.xmotion.x, e.xmotion.y, btsData[i].rect)) {
-                        btsData[i].gc = &buttonGC_underPointer;
-                        if(e.type == ButtonPress && e.xbutton.button == Button1) {
-                            btsData[i].gc = &buttonGC_onClick;
-                            res = btsData[i].button->result;
-                            quit = true;
+            case Expose:
+                if (e.type != Expose)
+                {
+                    for(int i = 0; i < numButtons; i++) {
+                        btsData[i].gc = &buttonGC;
+                        if (isInside(e.xmotion.x, e.xmotion.y, btsData[i].rect)) {
+                            btsData[i].gc = (pressedIndex == i) ? &buttonGC_onClick : &buttonGC_underPointer;
+                            if(e.type == ButtonPress && e.xbutton.button == Button1) {
+                                btsData[i].gc = &buttonGC_onClick;
+                                pressedIndex = i;
+                            }
+                            else if (e.type == ButtonRelease && e.xbutton.button == Button1)
+                            {
+                                if (pressedIndex == i)
+                                {
+                                    res = btsData[i].button->result;
+                                    quit = true;
+                                }
+                            }
                         }
                     }
+
+                    if (e.type == ButtonRelease && e.xbutton.button == Button1)
+                        pressedIndex = -1;
+
+                    XEvent exp;
+                    memset(&exp, 0, sizeof(exp));
+
+                    exp.type = Expose;
+                    exp.xexpose.window = win;
+                    XSendEvent(dpy, win, False, ExposureMask, &exp);
+                }
+                else
+                {
+                    //draw the text in multiply lines----------------------------------------------------------------------
+                    for(int i = 0; i < textLines; i++){
+                        Xutf8DrawString( dpy, backBuffer, fs, textGC, dim.pad_left, dim.pad_up + i * (dim.lineSpacing + 18),
+                                    text_splitted[i], (int)strlen(text_splitted[i]));
+                    }
+                    //------------------------------------------------------------------------------------------------------
+                    XFillRectangle(dpy, backBuffer, barGC, 0, textH + dim.pad_up + dim.pad_down, winW, dim.barHeight);
+
+                    for(int i = 0; i < numButtons; i++){
+                        XFillRectangle(dpy, backBuffer, *btsData[i].gc, btsData[i].rect.x, btsData[i].rect.y,
+                                    btsData[i].rect.width, btsData[i].rect.height);
+                        XDrawRectangle(dpy, backBuffer, buttonGC_outline, btsData[i].rect.x, btsData[i].rect.y,
+                                        btsData[i].rect.width, btsData[i].rect.height);
+
+                        XRectangle btTextDim;
+                        Xutf8TextExtents(fs, btsData[i].button->label, (int)strlen(btsData[i].button->label),
+                                    &btTextDim, NULL);
+                        Xutf8DrawString( dpy, backBuffer, fs, textGC,
+                                    btsData[i].rect.x + (btsData[i].rect.width  - btTextDim.width ) / 2,
+                                    btsData[i].rect.y + (btsData[i].rect.height + btTextDim.height) / 2,
+                                    btsData[i].button->label, (int)strlen(btsData[i].button->label));
+                    }
+
+                    // copy from the back buffer so that nothing flickers
+                    XCopyArea(dpy, backBuffer, win, backBufferGC, 0, 0, winW, winH, 0, 0);
                 }
 
-            case Expose:
-                //draw the text in multiply lines----------------------------------------------------------------------
-                for(int i = 0; i < textLines; i++){
-
-                    XwcDrawString( dpy, win, fs, textGC, dim.pad_left, dim.pad_up + i * (dim.lineSpacing + 18),
-                                   text_splitted[i], (int)wcslen(text_splitted[i]));
+                break;
+            
+            case KeyPress:
+                const KeySym sym = XLookupKeysym(&e.xkey, 0);
+                for (int i = 0; i < numButtons; ++i)
+                {
+                    if (sym == XK_Escape && (btsData[i].button->flags & MBOX_BUTTONFLAGS_ESCAPEKEY_DEFAULT))
+                    {
+                        res = btsData[i].button->result;
+                        quit = true;
+                        break;
+                    }
+                    else if (sym == XK_Return && (btsData[i].button->flags & MBOX_BUTTONFLAGS_RETURNKEY_DEFAULT))
+                    {
+                        res = btsData[i].button->result;
+                        quit = true;
+                        break;
+                    }
                 }
-                //------------------------------------------------------------------------------------------------------
-                XFillRectangle(dpy, win, barGC, 0, textH + dim.pad_up + dim.pad_down, winW, dim.barHeight);
-
-                for(int i = 0; i < numButtons; i++){
-                    XFillRectangle(dpy, win, *btsData[i].gc, btsData[i].rect.x, btsData[i].rect.y,
-                                   btsData[i].rect.width, btsData[i].rect.height);
-
-                    XRectangle btTextDim;
-                    XwcTextExtents(fs, btsData[i].button->label, (int)wcslen(btsData[i].button->label),
-                                   &btTextDim, NULL);
-                    XwcDrawString( dpy, win, fs, textGC,
-                                   btsData[i].rect.x + (btsData[i].rect.width  - btTextDim.width ) / 2,
-                                   btsData[i].rect.y + (btsData[i].rect.height + btTextDim.height) / 2,
-                                   btsData[i].button->label, (int)wcslen(btsData[i].button->label));
-                }
-                XFlush(dpy);
-
                 break;
 
             case ClientMessage:
-                //if window's cross button pressed does nothing
-                //if((unsigned int)(e.xclient.data.l[0]) == WM_DELETE_WINDOW)
-                    //quit = true;
+                // if window's cross button pressed, quit
+                if((unsigned int)(e.xclient.data.l[0]) == WM_DELETE_WINDOW)
+                    quit = true;
                 break;
             default:
                 break;
@@ -307,8 +413,12 @@ int Messagebox(const char* title, const wchar_t* text, const Button* buttons, in
     for(int i = 0; i < textLines; i++){
         free(text_splitted[i]);
     }
+
+    setlocale(LC_ALL, oldLocale);
+
     free(text_splitted);
     free(btsData);
+    free(oldLocale);
     if (missingCharset_list)
         XFreeStringList(missingCharset_list);
     XDestroyWindow(dpy, win);
@@ -318,6 +428,8 @@ int Messagebox(const char* title, const wchar_t* text, const Button* buttons, in
     XFreeGC(dpy, buttonGC);
     XFreeGC(dpy, buttonGC_underPointer);
     XFreeGC(dpy, buttonGC_onClick);
+    XFreeGC(dpy, buttonGC_outline);
+    XFreeGC(dpy, backBufferGC);
     XFreeColormap(dpy, cmap);
     XCloseDisplay(dpy);
 
